@@ -3,7 +3,7 @@ package keyfunc_test
 import (
 	"testing"
 
-	"github.com/MicahParks/keyfunc"
+	keyfunc "github.com/pmishchenko-ua/jwt-keyfunc"
 )
 
 const (

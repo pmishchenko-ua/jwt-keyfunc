@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -14,9 +15,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt"
 
-	"github.com/MicahParks/keyfunc"
+	keyfunc "github.com/pmishchenko-ua/jwt-keyfunc"
 )
 
 const (
@@ -39,7 +40,7 @@ type pseudoJSONKey struct {
 
 // TestNewGiven tests that given keys will be added to a JWKS with a remote resource.
 func TestNewGiven(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "*")
+	tempDir, err := ioutil.TempDir("", "*")
 	if err != nil {
 		t.Fatalf(logFmt, "Failed to create a temporary directory.", err)
 	}
@@ -57,7 +58,7 @@ func TestNewGiven(t *testing.T) {
 		t.Fatalf(logFmt, "Failed to create cryptographic keys for the test.", err)
 	}
 
-	err = os.WriteFile(jwksFile, jwksBytes, 0600)
+	err = ioutil.WriteFile(jwksFile, jwksBytes, 0600)
 	if err != nil {
 		t.Fatalf(logFmt, "Failed to write JWKS file to temporary directory.", err)
 	}
