@@ -4,9 +4,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt"
 
-	"github.com/MicahParks/keyfunc"
+	keyfunc "github.com/pmishchenko-ua/jwt-keyfunc"
 )
 
 func main() {

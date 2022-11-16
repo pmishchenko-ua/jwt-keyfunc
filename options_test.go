@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/MicahParks/keyfunc"
+	keyfunc "github.com/pmishchenko-ua/jwt-keyfunc"
 )
 
 func TestResponseExtractorStatusOK(t *testing.T) {

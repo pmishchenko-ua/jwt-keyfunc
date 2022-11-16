@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	io "io/ioutil"
 	"net/http"
 	"time"
 )

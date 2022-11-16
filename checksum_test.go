@@ -2,6 +2,7 @@ package keyfunc_test
 
 import (
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,14 +10,14 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt"
 
-	"github.com/MicahParks/keyfunc"
+	keyfunc "github.com/pmishchenko-ua/jwt-keyfunc"
 )
 
 // TestChecksum confirms that the JWKS will only perform a refresh if a new JWKS is read from the remote resource.
 func TestChecksum(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "*")
+	tempDir, err := ioutil.TempDir("", "*")
 	if err != nil {
 		t.Fatalf(logFmt, "Failed to create a temporary directory.", err)
 	}
@@ -29,7 +30,7 @@ func TestChecksum(t *testing.T) {
 
 	jwksFile := filepath.Join(tempDir, jwksFilePath)
 
-	err = os.WriteFile(jwksFile, []byte(jwksJSON), 0600)
+	err = ioutil.WriteFile(jwksFile, []byte(jwksJSON), 0600)
 	if err != nil {
 		t.Fatalf(logFmt, "Failed to write JWKS file to temporary directory.", err)
 	}
@@ -85,7 +86,7 @@ func TestChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatalf(logFmt, "Failed to create a test JWKS.", err)
 	}
-	err = os.WriteFile(jwksFile, jwksBytes, 0600)
+	err = ioutil.WriteFile(jwksFile, jwksBytes, 0600)
 	if err != nil {
 		t.Fatalf(logFmt, "Failed to write JWKS file to temporary directory.", err)
 	}
