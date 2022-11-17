@@ -10,7 +10,7 @@ const (
 )
 
 // Oct parses a jsonWebKey and turns it into a raw byte slice (octet). This includes HMAC keys.
-func (j *jsonWebKey) Oct() (publicKey []byte, err error) {
+func (j *JsonWebKey) Oct() (publicKey []byte, err error) {
 	if j.K == "" {
 		return nil, fmt.Errorf("%w: %s", ErrMissingAssets, ktyOct)
 	}

@@ -92,8 +92,8 @@ func TestNewGivenCustomAlg_NegativeCase(t *testing.T) {
 	}
 
 	parsed, err := jwt.NewParser().Parse(jwtB64, jwks.Keyfunc)
-	if !errors.Is(err, keyfunc.ErrJWKAlgMismatch) {
-		t.Fatalf("Failed to return ErrJWKAlgMismatch: %v.", err)
+	if !errors.Is(err, keyfunc.ErrNoMatchingKey) {
+		t.Fatalf("Failed to return ErrNoMatchingKey: %v.", err)
 	}
 
 	if parsed.Valid {

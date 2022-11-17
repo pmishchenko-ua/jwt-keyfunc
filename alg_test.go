@@ -19,7 +19,7 @@ func TestAlgMismatch(t *testing.T) {
 	}
 
 	_, err = jwt.Parse(jwtB64, jwks.Keyfunc)
-	if !errors.Is(err, keyfunc.ErrJWKAlgMismatch) {
-		t.Fatalf("Expected ErrJWKAlgMismatch, got %v", err)
+	if !errors.Is(err, keyfunc.ErrNoMatchingKey) {
+		t.Fatalf("Expected ErrNoMatchingKey, got %v", err)
 	}
 }

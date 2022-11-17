@@ -7,6 +7,12 @@ import (
 )
 
 // GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
+
+// GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
+
+// GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
+
+// GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
 type GivenKey struct {
 	algorithm string
 	inter     interface{}
@@ -26,13 +32,14 @@ type GivenKeyOptions struct {
 
 // NewGiven creates a JWKS from a map of given keys.
 func NewGiven(givenKeys map[string]GivenKey) (jwks *JWKS) {
-	keys := make(map[string]parsedJWK)
-
+	keys := make([]ParsedJWK, len(givenKeys))
+	idx := 0
 	for kid, given := range givenKeys {
-		keys[kid] = parsedJWK{
+		keys[idx] = ParsedJWK{
+			Public:    given.inter,
 			algorithm: given.algorithm,
-			public:    given.inter,
-		}
+			kid:       kid}
+		idx++
 	}
 
 	return &JWKS{
