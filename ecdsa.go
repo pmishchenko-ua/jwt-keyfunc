@@ -28,7 +28,7 @@ var (
 )
 
 // ECDSA parses a jsonWebKey and turns it into an ECDSA public key.
-func (j *jsonWebKey) ECDSA() (publicKey *ecdsa.PublicKey, err error) {
+func (j *JsonWebKey) ECDSA() (publicKey *ecdsa.PublicKey, err error) {
 	if j.X == "" || j.Y == "" || j.Curve == "" {
 		return nil, fmt.Errorf("%w: %s", ErrMissingAssets, ktyEC)
 	}

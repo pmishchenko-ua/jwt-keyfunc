@@ -12,7 +12,7 @@ const (
 )
 
 // RSA parses a jsonWebKey and turns it into an RSA public key.
-func (j *jsonWebKey) RSA() (publicKey *rsa.PublicKey, err error) {
+func (j *JsonWebKey) RSA() (publicKey *rsa.PublicKey, err error) {
 	if j.Exponent == "" || j.Modulus == "" {
 		return nil, fmt.Errorf("%w: %s", ErrMissingAssets, ktyRSA)
 	}

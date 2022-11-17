@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,11 +15,8 @@ var (
 	// the JWT.
 	ErrJWKAlgMismatch = errors.New(`the given JWK was found, but its "alg" parameter's value did not match the expected algorithm`)
 
-	// ErrJWKUseWhitelist indicates that the given JWK was found, but its "use" parameter's value was not whitelisted.
-	ErrJWKUseWhitelist = errors.New(`the given JWK was found, but its "use" parameter's value was not whitelisted`)
-
-	// ErrKIDNotFound indicates that the given key ID was not found in the JWKS.
-	ErrKIDNotFound = errors.New("the given key ID was not found in the JWKS")
+	// ErrNoMatchingKey indicated no JWKey is matching the token according ti SingleStore rules.
+	ErrNoMatchingKey = errors.New("no key can be matched to validate the token")
 
 	// ErrMissingAssets indicates there are required assets are missing to create a public key.
 	ErrMissingAssets = errors.New("required assets are missing to create a public key")
@@ -41,25 +38,30 @@ const (
 // See https://tools.ietf.org/html/rfc7517#section-4.2.
 type JWKUse string
 
-// jsonWebKey represents a JSON Web Key inside a JWKS.
-type jsonWebKey struct {
-	Algorithm string `json:"alg"`
-	Curve     string `json:"crv"`
-	Exponent  string `json:"e"`
-	K         string `json:"k"`
-	ID        string `json:"kid"`
-	Modulus   string `json:"n"`
-	Type      string `json:"kty"`
-	Use       string `json:"use"`
-	X         string `json:"x"`
-	Y         string `json:"y"`
+// JsonWebKey represents a JSON Web Key inside a JWKS.
+type JsonWebKey struct {
+	Algorithm   string      `json:"alg"`
+	Curve       string      `json:"crv"`
+	Exponent    string      `json:"e"`
+	K           string      `json:"k"`
+	ID          string      `json:"kid"`
+	Modulus     string      `json:"n"`
+	Type        string      `json:"kty"`
+	Use         string      `json:"use"`
+	X           string      `json:"x"`
+	Y           string      `json:"y"`
+	UserNameKey string      `json:"usernameFrom"`
+	Audience    interface{} `json:"aud"`
 }
 
 // parsedJWK represents a JSON Web Key parsed with fields as the correct Go types.
-type parsedJWK struct {
+type ParsedJWK struct {
 	algorithm string
-	public    interface{}
+	Public    interface{}
 	use       JWKUse
+	Jwk       *JsonWebKey
+	kid       string
+	Audience  []string
 }
 
 // JWKS represents a JSON Web Key Set (JWK Set).
@@ -72,7 +74,7 @@ type JWKS struct {
 	givenKeys           map[string]GivenKey
 	givenKIDOverride    bool
 	jwksURL             string
-	keys                map[string]parsedJWK
+	keys                []ParsedJWK
 	mux                 sync.RWMutex
 	refreshErrorHandler ErrorHandler
 	refreshInterval     time.Duration
@@ -86,7 +88,7 @@ type JWKS struct {
 
 // rawJWKS represents a JWKS in JSON format.
 type rawJWKS struct {
-	Keys []*jsonWebKey `json:"keys"`
+	Keys []*JsonWebKey `json:"keys"`
 }
 
 // NewJSON creates a new JWKS from a raw JSON message.
@@ -99,9 +101,9 @@ func NewJSON(jwksBytes json.RawMessage) (jwks *JWKS, err error) {
 
 	// Iterate through the keys in the raw JWKS. Add them to the JWKS.
 	jwks = &JWKS{
-		keys: make(map[string]parsedJWK, len(rawKS.Keys)),
+		keys: make([]ParsedJWK, len(rawKS.Keys)),
 	}
-	for _, key := range rawKS.Keys {
+	for idx, key := range rawKS.Keys {
 		var keyInter interface{}
 		switch keyType := key.Type; keyType {
 		case ktyEC:
@@ -128,11 +130,22 @@ func NewJSON(jwksBytes json.RawMessage) (jwks *JWKS, err error) {
 			// Ignore unknown key types silently.
 			continue
 		}
+		audience := make([]string, 0)
+		if key.Audience != nil {
+			if audStr, ok := key.Audience.(string); ok {
+				audience = strings.Split(audStr, ",")
+			} else if audList, ok := key.Audience.([]string); ok {
+				audience = audList
+			}
+		}
 
-		jwks.keys[key.ID] = parsedJWK{
+		jwks.keys[idx] = ParsedJWK{
 			algorithm: key.Algorithm,
 			use:       JWKUse(key.Use),
-			public:    keyInter,
+			Public:    keyInter,
+			Jwk:       key,
+			kid:       key.ID,
+			Audience:  audience,
 		}
 	}
 
@@ -152,10 +165,8 @@ func (j *JWKS) KIDs() (kids []string) {
 	j.mux.RLock()
 	defer j.mux.RUnlock()
 	kids = make([]string, len(j.keys))
-	index := 0
-	for kid := range j.keys {
-		kids[index] = kid
-		index++
+	for idx, key := range j.keys {
+		kids[idx] = key.kid
 	}
 	return kids
 }
@@ -180,22 +191,84 @@ func (j *JWKS) RawJWKS() []byte {
 func (j *JWKS) ReadOnlyKeys() map[string]interface{} {
 	keys := make(map[string]interface{})
 	j.mux.Lock()
-	for kid, cryptoKey := range j.keys {
-		keys[kid] = cryptoKey.public
+	for _, key := range j.keys {
+		keys[key.kid] = key.Public
 	}
 	j.mux.Unlock()
 	return keys
 }
+func findKeyIdx(alg string, kid string, keys []ParsedJWK) int {
+	for idx, key := range keys {
+		if key.kid == kid {
+			return idx
+		}
+	}
+	return -1
+}
 
-// getKey gets the jsonWebKey from the given KID from the JWKS. It may refresh the JWKS if configured to.
-func (j *JWKS) getKey(alg, kid string) (jsonKey interface{}, err error) {
+func (j *JWKS) canUseKey(key ParsedJWK) bool {
+	canUseKey := true
+	// jwkUseWhitelist might be empty if the jwks was from keyfunc.NewJSON() or if JWKUseNoWhitelist option was true.
+	// in this case we don't restrict "use" parameter
+	if len(j.jwkUseWhitelist) > 0 {
+		_, canUseKey = j.jwkUseWhitelist[key.use]
+	}
+	return canUseKey
+}
+
+func (j *JWKS) getMatchingKeys(alg, kid, iss string) []*ParsedJWK {
+	result := make([]*ParsedJWK, 0, 1)
+	if kid != "" {
+		for idx, key := range j.keys {
+			if (key.kid == kid) && (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+					result = append(result, &j.keys[idx])
+			}
+		}
+		return result
+	}
+	if iss != "" {
+		for _, key := range j.keys {
+			if key.kid == iss && (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+				result = append(result, &key)
+			}
+		}
+	}
+	// no match with "iss", use "alg" only
+	if len(result) == 0 {
+		for idx, key := range j.keys {
+			if key.algorithm == alg || key.algorithm == "" {
+				// jwkUseWhitelist might be empty if the jwks was from keyfunc.NewJSON() or if JWKUseNoWhitelist option was true.
+				canUseKey := true
+				if len(j.jwkUseWhitelist) > 0 {
+					_, canUseKey = j.jwkUseWhitelist[j.keys[idx].use]
+				}
+				if canUseKey {
+					result = append(result, &j.keys[idx])
+				}
+			}
+		}
+	}
+	return result
+}
+
+// GetMatchingKeysWithRefresh implements the logic described in
+// https://docs.singlestore.com/db/v7.8/en/security/authentication/authenticate-via-jwt.html
+//
+// JWTs are matched with JSON Web Keys (JWKs) for validation as follows:
+//
+// 1. If the JWT has a kid (Key ID) field, the JWKs with matching kid fields are validated.
+// 2. If the JWT has a kid field that doesn’t match any JWK or jwt_config key, the authentication request is rejected. See Validate JWTs with the jwt-config for more information.
+// 3. If the JWT has an iss (Issuer) field (instead of a kid field) that matches the kid in one or more JWKs, the JWKs with matching kid fields are validated.
+// 4. If the JWT does not have a kid field and the iss field does not match the kid field in any JWK, then validation is attempted with all the JWKs with a matching alg (Algorithm) field. If the alg field is not specified, the kty (Key Type) field is used instead.
+//
+func (j *JWKS) GetMatchingKeysWithRefresh(alg, kid, iss string) (matchingKeys []*ParsedJWK, err error) {
 	j.mux.RLock()
-	pubKey, ok := j.keys[kid]
+	matchingKeys = j.getMatchingKeys(alg, kid, iss)
 	j.mux.RUnlock()
 
-	if !ok {
+	if len(matchingKeys) == 0 {
 		if !j.refreshUnknownKID {
-			return nil, ErrKIDNotFound
+			return matchingKeys, ErrNoMatchingKey
 		}
 
 		ctx, cancel := context.WithCancel(j.ctx)
@@ -207,7 +280,7 @@ func (j *JWKS) getKey(alg, kid string) (jsonKey interface{}, err error) {
 		case j.refreshRequests <- cancel:
 		default:
 			// If the j.refreshRequests channel is full, return the error early.
-			return nil, ErrKIDNotFound
+			return matchingKeys, ErrNoMatchingKey
 		}
 
 		// Wait for the JWKS refresh to finish.
@@ -215,22 +288,12 @@ func (j *JWKS) getKey(alg, kid string) (jsonKey interface{}, err error) {
 
 		j.mux.RLock()
 		defer j.mux.RUnlock()
-		if pubKey, ok = j.keys[kid]; !ok {
-			return nil, ErrKIDNotFound
-		}
+		matchingKeys = j.getMatchingKeys(alg, kid, iss)
 	}
 
-	// jwkUseWhitelist might be empty if the jwks was from keyfunc.NewJSON() or if JWKUseNoWhitelist option was true.
-	if len(j.jwkUseWhitelist) > 0 {
-		_, ok = j.jwkUseWhitelist[pubKey.use]
-		if !ok {
-			return nil, fmt.Errorf(`%w: JWK "use" parameter value %q is not whitelisted`, ErrJWKUseWhitelist, pubKey.use)
-		}
+	if len(matchingKeys) == 0 {
+		return matchingKeys, ErrNoMatchingKey
 	}
 
-	if pubKey.algorithm != "" && pubKey.algorithm != alg {
-		return nil, fmt.Errorf(`%w: JWK "alg" parameter value %q does not match token "alg" parameter value %q`, ErrJWKAlgMismatch, pubKey.algorithm, alg)
-	}
-
-	return pubKey.public, nil
+	return matchingKeys, nil
 }
