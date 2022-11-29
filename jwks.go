@@ -216,12 +216,24 @@ func (j *JWKS) canUseKey(key ParsedJWK) bool {
 	return canUseKey
 }
 
+// getMatchingKeys implements the logic described in
+// https://docs.singlestore.com/db/v7.8/en/security/authentication/authenticate-via-jwt.html
+// A Read Lock for `j.mux` is acquired when the function is called
+//
+// JWTs are matched with JSON Web Keys (JWKs) for validation as follows:
+// 1. If the JWT has a kid (Key ID) field, the JWKs with matching kid fields are validated.
+// 2. If the JWT has a kid field that doesn’t match any JWK or jwt_config key, the authentication request is rejected. See Validate JWTs with the jwt-config for more information.
+// 3. If the JWT has an iss (Issuer) field (instead of a kid field) that matches the kid in one or more JWKs, the JWKs with matching kid fields are validated.
+// 4. If the JWT does not have a kid field and the iss field does not match the kid field in any JWK, then validation is attempted with all the JWKs with a matching alg (Algorithm) field. If the alg field is not specified, the kty (Key Type) field is used instead.
 func (j *JWKS) getMatchingKeys(alg, kid, iss string) []*ParsedJWK {
-	result := make([]*ParsedJWK, 0, 1)
+	j.mux.RLock()
+	defer j.mux.RUnlock()
+	var result []*ParsedJWK
 	if kid != "" {
-		for idx, key := range j.keys {
+		for _, key := range j.keys {
+			key := key
 			if (key.kid == kid) && (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
-					result = append(result, &j.keys[idx])
+				result = append(result, &key)
 			}
 		}
 		return result
@@ -229,6 +241,7 @@ func (j *JWKS) getMatchingKeys(alg, kid, iss string) []*ParsedJWK {
 	if iss != "" {
 		for _, key := range j.keys {
 			if key.kid == iss && (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+				key := key
 				result = append(result, &key)
 			}
 		}
@@ -251,20 +264,10 @@ func (j *JWKS) getMatchingKeys(alg, kid, iss string) []*ParsedJWK {
 	return result
 }
 
-// GetMatchingKeysWithRefresh implements the logic described in
-// https://docs.singlestore.com/db/v7.8/en/security/authentication/authenticate-via-jwt.html
-//
-// JWTs are matched with JSON Web Keys (JWKs) for validation as follows:
-//
-// 1. If the JWT has a kid (Key ID) field, the JWKs with matching kid fields are validated.
-// 2. If the JWT has a kid field that doesn’t match any JWK or jwt_config key, the authentication request is rejected. See Validate JWTs with the jwt-config for more information.
-// 3. If the JWT has an iss (Issuer) field (instead of a kid field) that matches the kid in one or more JWKs, the JWKs with matching kid fields are validated.
-// 4. If the JWT does not have a kid field and the iss field does not match the kid field in any JWK, then validation is attempted with all the JWKs with a matching alg (Algorithm) field. If the alg field is not specified, the kty (Key Type) field is used instead.
-//
+// GetMatchingKeysWithRefresh gets the keys according to SingleStore logic,
+// and if `j.refreshUnknownKID` is set to `true`, performs jwks refresh if no key was matched
 func (j *JWKS) GetMatchingKeysWithRefresh(alg, kid, iss string) (matchingKeys []*ParsedJWK, err error) {
-	j.mux.RLock()
 	matchingKeys = j.getMatchingKeys(alg, kid, iss)
-	j.mux.RUnlock()
 
 	if len(matchingKeys) == 0 {
 		if !j.refreshUnknownKID {
@@ -286,8 +289,6 @@ func (j *JWKS) GetMatchingKeysWithRefresh(alg, kid, iss string) (matchingKeys []
 		// Wait for the JWKS refresh to finish.
 		<-ctx.Done()
 
-		j.mux.RLock()
-		defer j.mux.RUnlock()
 		matchingKeys = j.getMatchingKeys(alg, kid, iss)
 	}
 

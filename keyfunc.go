@@ -36,7 +36,7 @@ func (j *JWKS) Keyfunc(token *jwt.Token) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	// here we assume that 
+	// here we assume that there is only one key matching "kid"
 	return keys[0].Public, nil
 }
 

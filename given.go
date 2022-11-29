@@ -7,12 +7,6 @@ import (
 )
 
 // GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
-
-// GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
-
-// GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
-
-// GivenKey represents a cryptographic key that resides in a JWKS. In conjuncture with Options.
 type GivenKey struct {
 	algorithm string
 	inter     interface{}
