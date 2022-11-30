@@ -3,7 +3,6 @@ package keyfunc
 import (
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/golang-jwt/jwt"
@@ -16,25 +15,9 @@ var (
 
 // Keyfunc matches the signature of github.com/golang-jwt/jwt's jwt.Keyfunc function.
 func (j *JWKS) Keyfunc(token *jwt.Token) (interface{}, error) {
-	kidInter, ok := token.Header["kid"]
-	if !ok {
-		return nil, fmt.Errorf("%w: could not find kid in JWT header", ErrKID)
-	}
-	kid, ok := kidInter.(string)
-	if !ok {
-		return nil, fmt.Errorf("%w: could not convert kid in JWT header to string", ErrKID)
-	}
-
-	alg, ok := token.Header["alg"].(string)
-	if !ok {
-		// For test coverage purposes; this should be impossible to reach because the JWT package rejects a token
-		// without an alg parameter in the header before calling jwt.Keyfunc.
-		return nil, fmt.Errorf(`%w: the JWT header did not contain the "alg" parameter, which is required by RFC 7515 section 4.1.1`, ErrJWKAlgMismatch)
-	}
-	// jsonKey, err := j.GeKeyWithRefresh(alg, kid)
-	keys, err := j.GetMatchingKeysWithRefresh(alg, kid, "")
-	if err != nil {
-		return nil, err
+	keys := j.GetMatchingKeysWithRefresh(token)
+	if len(keys) == 0 {
+		return nil, ErrNoMatchingKey
 	}
 	// here we assume that there is only one key matching "kid"
 	return keys[0].Public, nil

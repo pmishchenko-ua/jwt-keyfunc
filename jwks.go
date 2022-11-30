@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/golang-jwt/jwt"
 )
 
 var (
@@ -40,18 +43,18 @@ type JWKUse string
 
 // JsonWebKey represents a JSON Web Key inside a JWKS.
 type JsonWebKey struct {
-	Algorithm   string      `json:"alg"`
-	Curve       string      `json:"crv"`
-	Exponent    string      `json:"e"`
-	K           string      `json:"k"`
-	ID          string      `json:"kid"`
-	Modulus     string      `json:"n"`
-	Type        string      `json:"kty"`
-	Use         string      `json:"use"`
-	X           string      `json:"x"`
-	Y           string      `json:"y"`
-	UserNameKey string      `json:"usernameFrom"`
-	Audience    interface{} `json:"aud"`
+	Algorithm    string      `json:"alg"`
+	Curve        string      `json:"crv"`
+	Exponent     string      `json:"e"`
+	K            string      `json:"k"`
+	ID           string      `json:"kid"`
+	Modulus      string      `json:"n"`
+	Type         string      `json:"kty"`
+	Use          string      `json:"use"`
+	X            string      `json:"x"`
+	Y            string      `json:"y"`
+	UsernameFrom string      `json:"usernameFrom"`
+	audience     interface{} `json:"aud"`
 }
 
 // parsedJWK represents a JSON Web Key parsed with fields as the correct Go types.
@@ -61,7 +64,7 @@ type ParsedJWK struct {
 	use       JWKUse
 	Jwk       *JsonWebKey
 	kid       string
-	Audience  []string
+	audience  []string
 }
 
 // JWKS represents a JSON Web Key Set (JWK Set).
@@ -131,10 +134,10 @@ func NewJSON(jwksBytes json.RawMessage) (jwks *JWKS, err error) {
 			continue
 		}
 		audience := make([]string, 0)
-		if key.Audience != nil {
-			if audStr, ok := key.Audience.(string); ok {
+		if key.audience != nil {
+			if audStr, ok := key.audience.(string); ok {
 				audience = strings.Split(audStr, ",")
-			} else if audList, ok := key.Audience.([]string); ok {
+			} else if audList, ok := key.audience.([]string); ok {
 				audience = audList
 			}
 		}
@@ -146,7 +149,7 @@ func NewJSON(jwksBytes json.RawMessage) (jwks *JWKS, err error) {
 				Public:    keyInter,
 				Jwk:       key,
 				kid:       key.ID,
-				Audience:  audience,
+				audience:  audience,
 			})
 	}
 
@@ -212,61 +215,125 @@ func (j *JWKS) canUseKey(key ParsedJWK) bool {
 	return canUseKey
 }
 
-// getMatchingKeys implements the logic described in
-// https://docs.singlestore.com/db/v7.8/en/security/authentication/authenticate-via-jwt.html
-// A Read Lock for `j.mux` is acquired when the function is called
-//
-// JWTs are matched with JSON Web Keys (JWKs) for validation as follows:
-// 1. If the JWT has a kid (Key ID) field, the JWKs with matching kid fields are validated.
-// 2. If the JWT has a kid field that doesn’t match any JWK or jwt_config key, the authentication request is rejected. See Validate JWTs with the jwt-config for more information.
-// 3. If the JWT has an iss (Issuer) field (instead of a kid field) that matches the kid in one or more JWKs, the JWKs with matching kid fields are validated.
-// 4. If the JWT does not have a kid field and the iss field does not match the kid field in any JWK, then validation is attempted with all the JWKs with a matching alg (Algorithm) field. If the alg field is not specified, the kty (Key Type) field is used instead.
-// If the matching JWK includes an aud (Audience) field which does not match the aud field in the JWT, then the authentication request is rejected.
-// The aud field can be a string or an array of strings. If any aud string of the JWT matches any aud string of the JWK, it is considered a match.
-func (j *JWKS) getMatchingKeys(alg, kid, iss string) []*ParsedJWK {
-	j.mux.RLock()
-	defer j.mux.RUnlock()
-	var result []*ParsedJWK
-	if kid != "" {
-		if parsedKeys, ok := j.keys[kid]; ok {
-			for _, key := range parsedKeys {
-				if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
-					result = append(result, &key)
-				}
-			}
-		}
-		return result
-	}
-	if iss != "" {
-		if parsedKeys, ok := j.keys[iss]; ok {
-			for _, key := range parsedKeys {
-				if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
-					result = append(result, &key)
-				}
+func matchSlices(slice1 []string, slice2 []string) bool {
+	for _, v1 := range slice1 {
+		for _, v2 := range slice2 {
+			if v1 == v2 {
+				return true
 			}
 		}
 	}
-	// no match with "iss", use "alg" only
-	if len(result) == 0 {
-		for _, parsedKeys := range j.keys {
-			for _, key := range parsedKeys {
-				if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
-					result = append(result, &key)
+	return false
+}
+
+func (j *JWKS) filterKeys(alg string, token *jwt.Token, parsedKeys []ParsedJWK) (result []*ParsedJWK) {
+	for idx, key := range parsedKeys {
+		if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+			audienceMatch := false
+			// https://docs.singlestore.com/db/v7.8/en/security/authentication/authenticate-via-jwt.html#validate-jwts-with-jwks
+			// If the matching JWK includes an aud (Audience) field which does not match the aud field in the JWT, then the authentication request is rejected.
+			// The aud field can be a string or an array of strings. If any aud string of the JWT matches any aud string of the JWK, it is considered a match.
+			if len(key.audience) == 0 {
+				// If the matching JWK does not define an audience (aud), audience checking is skipped. Note that aud is not a standard field in JWK.
+				audienceMatch = true
+			} else {
+				var audToken []string
+				claims := token.Claims.(jwt.MapClaims)
+				audTokenInter, ok := claims["aud"]
+				if ok {
+					audTokenStr, ok := audTokenInter.(string)
+					if ok {
+						// audToken is a comma-separated string
+						audToken = strings.Split(audTokenStr, ",")
+					} else {
+						// audTokenan is an array of strings
+						audToken, _ = audTokenInter.([]string)
+					}
+					// If any aud string of the JWT matches any aud string of the JWK, it is considered a match
+					audienceMatch = matchSlices(audToken, key.audience)
 				}
+			}
+			if audienceMatch {
+				result = append(result, &parsedKeys[idx])
 			}
 		}
 	}
 	return result
 }
 
+// GetMatchingKeys implements the logic described in
+// https://docs.singlestore.com/db/v7.8/en/security/authentication/authenticate-via-jwt.html
+// A Read Lock for `j.mux` is acquired when the JWKS is read
+//
+// JWTs are matched with JSON Web Keys (JWKs) for validation as follows:
+// 1. If the JWT has a kid (Key ID) field, the JWKs with matching kid fields are validated.
+// 2. If the JWT has a kid field that doesn’t match any JWK or jwt_config key, the authentication request is rejected. See Validate JWTs with the jwt-config for more information.
+// 3. If the JWT has an iss (Issuer) field (instead of a kid field) that matches the kid in one or more JWKs, the JWKs with matching kid fields are validated.
+// 4. If the JWT does not have a kid field and the iss field does not match the kid field in any JWK, then validation is attempted with all the JWKs with a matching alg (Algorithm) field. If the alg field is not specified, the kty (Key Type) field is used instead.
+func (j *JWKS) GetMatchingKeys(token *jwt.Token) (result []*ParsedJWK, err error) {
+	// alg must be present in jwt
+	var alg string
+	algInter, ok := token.Header["alg"]
+	if ok {
+		alg, ok = algInter.(string)
+		if !ok {
+			return result, fmt.Errorf("could not convert `alg` in JWT header to string")
+		}
+	} else {
+		return result, fmt.Errorf("could not validate a JWT without `alg` in header")
+	}
+
+	var kid string
+	kidInter, ok := token.Header["kid"]
+	if ok {
+		kid, ok = kidInter.(string)
+		if !ok {
+			return result, fmt.Errorf("could not convert `kid` in JWT header to string")
+		}
+	}
+	var iss string
+	claims := token.Claims.(jwt.MapClaims)
+	issInter, ok := claims["iss"]
+	// iss is present in jwt
+	if ok {
+		iss, ok = issInter.(string)
+		if !ok {
+			return result, fmt.Errorf("could not convert `iss` in JWT header to string")
+		}
+	}
+
+	j.mux.RLock()
+	defer j.mux.RUnlock()
+	if kid != "" {
+		if parsedKeys, ok := j.keys[kid]; ok {
+			result = j.filterKeys(alg, token, parsedKeys)
+		}
+		// when "kid" is present in JWT, we match only keys with the same kid
+		return result, nil
+	}
+	if iss != "" {
+		if parsedKeys, ok := j.keys[iss]; ok {
+			result = j.filterKeys(alg, token, parsedKeys)
+		}
+	}
+	// no "kid" and no match with "iss", use "alg" only
+	if len(result) == 0 {
+		for _, parsedKeys := range j.keys {
+			currentResult := j.filterKeys(alg, token, parsedKeys)
+			result = append(result, currentResult...)
+		}
+	}
+	return result, nil
+}
+
 // GetMatchingKeysWithRefresh gets the keys according to SingleStore logic,
 // and if `j.refreshUnknownKID` is set to `true`, performs jwks refresh if no key was matched
-func (j *JWKS) GetMatchingKeysWithRefresh(alg, kid, iss string) (matchingKeys []*ParsedJWK, err error) {
-	matchingKeys = j.getMatchingKeys(alg, kid, iss)
+func (j *JWKS) GetMatchingKeysWithRefresh(token *jwt.Token) []*ParsedJWK {
+	matchingKeys, _ := j.GetMatchingKeys(token)
 
 	if len(matchingKeys) == 0 {
 		if !j.refreshUnknownKID {
-			return matchingKeys, ErrNoMatchingKey
+			return matchingKeys
 		}
 
 		ctx, cancel := context.WithCancel(j.ctx)
@@ -274,22 +341,17 @@ func (j *JWKS) GetMatchingKeysWithRefresh(alg, kid, iss string) (matchingKeys []
 		// Refresh the JWKS.
 		select {
 		case <-j.ctx.Done():
-			return
+			return matchingKeys
 		case j.refreshRequests <- cancel:
 		default:
 			// If the j.refreshRequests channel is full, return the error early.
-			return matchingKeys, ErrNoMatchingKey
+			return matchingKeys
 		}
 
 		// Wait for the JWKS refresh to finish.
 		<-ctx.Done()
 
-		matchingKeys = j.getMatchingKeys(alg, kid, iss)
+		matchingKeys, _ = j.GetMatchingKeys(token)
 	}
-
-	if len(matchingKeys) == 0 {
-		return matchingKeys, ErrNoMatchingKey
-	}
-
-	return matchingKeys, nil
+	return matchingKeys
 }
