@@ -74,7 +74,7 @@ type JWKS struct {
 	givenKeys           map[string]GivenKey
 	givenKIDOverride    bool
 	jwksURL             string
-	keys                []ParsedJWK
+	keys                map[string][]ParsedJWK
 	mux                 sync.RWMutex
 	refreshErrorHandler ErrorHandler
 	refreshInterval     time.Duration
@@ -101,9 +101,9 @@ func NewJSON(jwksBytes json.RawMessage) (jwks *JWKS, err error) {
 
 	// Iterate through the keys in the raw JWKS. Add them to the JWKS.
 	jwks = &JWKS{
-		keys: make([]ParsedJWK, len(rawKS.Keys)),
+		keys: make(map[string][]ParsedJWK, len(rawKS.Keys)),
 	}
-	for idx, key := range rawKS.Keys {
+	for _, key := range rawKS.Keys {
 		var keyInter interface{}
 		switch keyType := key.Type; keyType {
 		case ktyEC:
@@ -139,14 +139,15 @@ func NewJSON(jwksBytes json.RawMessage) (jwks *JWKS, err error) {
 			}
 		}
 
-		jwks.keys[idx] = ParsedJWK{
-			algorithm: key.Algorithm,
-			use:       JWKUse(key.Use),
-			Public:    keyInter,
-			Jwk:       key,
-			kid:       key.ID,
-			Audience:  audience,
-		}
+		jwks.keys[key.ID] = append(jwks.keys[key.ID],
+			ParsedJWK{
+				algorithm: key.Algorithm,
+				use:       JWKUse(key.Use),
+				Public:    keyInter,
+				Jwk:       key,
+				kid:       key.ID,
+				Audience:  audience,
+			})
 	}
 
 	return jwks, nil
@@ -165,8 +166,10 @@ func (j *JWKS) KIDs() (kids []string) {
 	j.mux.RLock()
 	defer j.mux.RUnlock()
 	kids = make([]string, len(j.keys))
-	for idx, key := range j.keys {
-		kids[idx] = key.kid
+	index := 0
+	for kid := range j.keys {
+		kids[index] = kid
+		index++
 	}
 	return kids
 }
@@ -191,19 +194,12 @@ func (j *JWKS) RawJWKS() []byte {
 func (j *JWKS) ReadOnlyKeys() map[string]interface{} {
 	keys := make(map[string]interface{})
 	j.mux.Lock()
-	for _, key := range j.keys {
-		keys[key.kid] = key.Public
+	for kid, parsedKey := range j.keys {
+		// TODO: generalize this function to account for multiple keys with a given kid
+		keys[kid] = parsedKey[0].Public
 	}
 	j.mux.Unlock()
 	return keys
-}
-func findKeyIdx(alg string, kid string, keys []ParsedJWK) int {
-	for idx, key := range keys {
-		if key.kid == kid {
-			return idx
-		}
-	}
-	return -1
 }
 
 func (j *JWKS) canUseKey(key ParsedJWK) bool {
@@ -225,38 +221,37 @@ func (j *JWKS) canUseKey(key ParsedJWK) bool {
 // 2. If the JWT has a kid field that doesn’t match any JWK or jwt_config key, the authentication request is rejected. See Validate JWTs with the jwt-config for more information.
 // 3. If the JWT has an iss (Issuer) field (instead of a kid field) that matches the kid in one or more JWKs, the JWKs with matching kid fields are validated.
 // 4. If the JWT does not have a kid field and the iss field does not match the kid field in any JWK, then validation is attempted with all the JWKs with a matching alg (Algorithm) field. If the alg field is not specified, the kty (Key Type) field is used instead.
+// If the matching JWK includes an aud (Audience) field which does not match the aud field in the JWT, then the authentication request is rejected.
+// The aud field can be a string or an array of strings. If any aud string of the JWT matches any aud string of the JWK, it is considered a match.
 func (j *JWKS) getMatchingKeys(alg, kid, iss string) []*ParsedJWK {
 	j.mux.RLock()
 	defer j.mux.RUnlock()
 	var result []*ParsedJWK
 	if kid != "" {
-		for _, key := range j.keys {
-			key := key
-			if (key.kid == kid) && (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
-				result = append(result, &key)
+		if parsedKeys, ok := j.keys[kid]; ok {
+			for _, key := range parsedKeys {
+				if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+					result = append(result, &key)
+				}
 			}
 		}
 		return result
 	}
 	if iss != "" {
-		for _, key := range j.keys {
-			if key.kid == iss && (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
-				key := key
-				result = append(result, &key)
+		if parsedKeys, ok := j.keys[iss]; ok {
+			for _, key := range parsedKeys {
+				if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+					result = append(result, &key)
+				}
 			}
 		}
 	}
 	// no match with "iss", use "alg" only
 	if len(result) == 0 {
-		for idx, key := range j.keys {
-			if key.algorithm == alg || key.algorithm == "" {
-				// jwkUseWhitelist might be empty if the jwks was from keyfunc.NewJSON() or if JWKUseNoWhitelist option was true.
-				canUseKey := true
-				if len(j.jwkUseWhitelist) > 0 {
-					_, canUseKey = j.jwkUseWhitelist[j.keys[idx].use]
-				}
-				if canUseKey {
-					result = append(result, &j.keys[idx])
+		for _, parsedKeys := range j.keys {
+			for _, key := range parsedKeys {
+				if (key.algorithm == alg || key.algorithm == "") && j.canUseKey(key) {
+					result = append(result, &key)
 				}
 			}
 		}

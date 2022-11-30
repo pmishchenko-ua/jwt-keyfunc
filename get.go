@@ -181,16 +181,14 @@ func (j *JWKS) refresh() (err error) {
 	if j.givenKeys != nil {
 		for kid, key := range j.givenKeys {
 			// Only overwrite the key if configured to do so.
-			kidIdx := findKeyIdx("", kid, j.keys)
 			if !j.givenKIDOverride {
-				if kidIdx >= 0 {
+				if _, ok := j.keys[kid]; ok {
 					continue
 				}
 			}
-			if kidIdx >= 0 {
-				j.keys[kidIdx] = ParsedJWK{Public: key.inter, kid: kid}
-			} else {
-				j.keys = append(j.keys, ParsedJWK{Public: key.inter, kid: kid})
+
+			j.keys[kid] = []ParsedJWK{
+				{Public: key.inter},
 			}
 		}
 	}
