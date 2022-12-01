@@ -84,6 +84,7 @@ type JWKS struct {
 	refreshRateLimit    time.Duration
 	refreshRequests     chan context.CancelFunc
 	refreshTimeout      time.Duration
+	initAsync           bool
 	refreshUnknownKID   bool
 	requestFactory      func(ctx context.Context, url string) (*http.Request, error)
 	responseExtractor   func(ctx context.Context, resp *http.Response) (json.RawMessage, error)

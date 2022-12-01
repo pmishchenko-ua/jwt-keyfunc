@@ -41,10 +41,11 @@ func Get(jwksURL string, options Options) (jwks *JWKS, err error) {
 			UseSignature: {},
 		}
 	}
-
-	err = jwks.refresh()
-	if err != nil {
-		return nil, err
+	if !jwks.initAsync { 
+		err = jwks.refresh()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if jwks.refreshInterval != 0 || jwks.refreshUnknownKID {
@@ -59,6 +60,12 @@ func Get(jwksURL string, options Options) (jwks *JWKS, err error) {
 // backgroundRefresh is meant to be a separate goroutine that will update the keys in a JWKS over a given interval of
 // time.
 func (j *JWKS) backgroundRefresh() {
+	if j.initAsync { 
+		if err := j.refresh(); err != nil && j.refreshErrorHandler != nil {
+			j.refreshErrorHandler(err)
+		}
+	}
+
 	var lastRefresh time.Time
 	var queueOnce sync.Once
 	var refreshMux sync.Mutex

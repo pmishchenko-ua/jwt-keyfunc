@@ -2,15 +2,9 @@ package keyfunc
 
 import (
 	"encoding/base64"
-	"errors"
 	"strings"
 
 	"github.com/golang-jwt/jwt"
-)
-
-var (
-	// ErrKID indicates that the JWT had an invalid kid.
-	ErrKID = errors.New("the JWT has an invalid kid")
 )
 
 // Keyfunc matches the signature of github.com/golang-jwt/jwt's jwt.Keyfunc function.

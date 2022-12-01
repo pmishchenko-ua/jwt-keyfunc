@@ -72,6 +72,9 @@ type Options struct {
 	// sure to call the JWKS.EndBackground method to end this goroutine when it's no longer needed.
 	RefreshUnknownKID bool
 
+	// InitAsync indicates that the JWKS will be fetched asynchronously upon initialization.
+	InitAsync bool
+
 	// RequestFactory creates HTTP requests for the remote JWKS resource located at the given url. For example, an
 	// HTTP header could be added to indicate a User-Agent.
 	RequestFactory func(ctx context.Context, url string) (*http.Request, error)
@@ -127,6 +130,7 @@ func applyOptions(jwks *JWKS, options Options) {
 	jwks.refreshRateLimit = options.RefreshRateLimit
 	jwks.refreshTimeout = options.RefreshTimeout
 	jwks.refreshUnknownKID = options.RefreshUnknownKID
+	jwks.initAsync = options.InitAsync
 	jwks.requestFactory = options.RequestFactory
 	jwks.responseExtractor = options.ResponseExtractor
 }
