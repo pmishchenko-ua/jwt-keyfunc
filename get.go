@@ -41,7 +41,7 @@ func Get(jwksURL string, options Options) (jwks *JWKS, err error) {
 			UseSignature: {},
 		}
 	}
-	if !jwks.initAsync { 
+	if !jwks.initAsync {
 		err = jwks.refresh()
 		if err != nil {
 			return nil, err
@@ -60,7 +60,7 @@ func Get(jwksURL string, options Options) (jwks *JWKS, err error) {
 // backgroundRefresh is meant to be a separate goroutine that will update the keys in a JWKS over a given interval of
 // time.
 func (j *JWKS) backgroundRefresh() {
-	if j.initAsync { 
+	if j.initAsync {
 		if err := j.refresh(); err != nil && j.refreshErrorHandler != nil {
 			j.refreshErrorHandler(err)
 		}
@@ -195,7 +195,12 @@ func (j *JWKS) refresh() (err error) {
 			}
 
 			j.keys[kid] = []ParsedJWK{
-				{Public: key.inter},
+				{
+					Public:    key.inter,
+					kid:       kid,
+					algorithm: key.algorithm,
+					kty:       GetTypeForAlg(key.algorithm),
+				},
 			}
 		}
 	}

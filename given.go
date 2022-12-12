@@ -34,6 +34,8 @@ func NewGiven(givenKeys map[string]GivenKey) (jwks *JWKS) {
 			{
 				algorithm: given.algorithm,
 				Public:    given.inter,
+				kid:       kid,
+				kty:       GetTypeForAlg(given.algorithm),
 			},
 		}
 	}

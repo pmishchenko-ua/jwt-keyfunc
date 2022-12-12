@@ -322,9 +322,9 @@ func TestJWKS_Use(t *testing.T) {
 		t.Fatalf(logFmt, "Failed to get JWKS from testing URL.", err)
 	}
 
-	tiktoken, err := jwt.Parse(tokenUseEnc, jwks.Keyfunc)
+	token, err := jwt.Parse(tokenUseEnc, jwks.Keyfunc)
 	if !errors.Is(err, keyfunc.ErrNoMatchingKey) {
-		t.Fatal(`Failed to return correct error for JWK with "use" parameter value of "enc".`, tiktoken.Raw)
+		t.Fatal(`Failed to return correct error for JWK with "use" parameter value of "enc".`, token.Raw)
 	}
 }
 
