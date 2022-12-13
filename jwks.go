@@ -237,6 +237,10 @@ func checkSlicesIntersect(slice1 []string, slice2 []string) bool {
 	return false
 }
 
+// GetTypeForAlg returns the corresponding Key Type (kty)
+// for a given `alg` value.
+// kty: https://www.rfc-editor.org/rfc/rfc7518#section-7.4.2
+// alg: https://www.rfc-editor.org/rfc/rfc7518#section-7.1.2
 func GetTypeForAlg(alg string) string {
 	switch alg {
 	case "RS256", "RS384", "RS512":
