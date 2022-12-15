@@ -60,12 +60,6 @@ func Get(jwksURL string, options Options) (jwks *JWKS, err error) {
 // backgroundRefresh is meant to be a separate goroutine that will update the keys in a JWKS over a given interval of
 // time.
 func (j *JWKS) backgroundRefresh() {
-	if j.initAsync {
-		if err := j.refresh(); err != nil && j.refreshErrorHandler != nil {
-			j.refreshErrorHandler(err)
-		}
-	}
-
 	var lastRefresh time.Time
 	var queueOnce sync.Once
 	var refreshMux sync.Mutex
@@ -75,6 +69,11 @@ func (j *JWKS) backgroundRefresh() {
 
 	// Create a channel that will never send anything unless there is a refresh interval.
 	refreshInterval := make(<-chan time.Time)
+
+	// When j.initAsync is true, we want to trigger refresh immediately
+	if j.initAsync {
+		j.refreshRequests <- func() {}
+	}
 
 	// Enter an infinite loop that ends when the background ends.
 	for {

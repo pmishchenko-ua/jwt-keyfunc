@@ -384,7 +384,7 @@ func (j *JWKS) GetMatchingKeysWithRefresh(token *jwt.Token) []*ParsedJWK {
 			return matchingKeys
 		case j.refreshRequests <- cancel:
 		default:
-			// If the j.refreshRequests channel is full, return the error early.
+			// If the j.refreshRequests channel is full, just return matchingKeys
 			return matchingKeys
 		}
 
